@@ -108,38 +108,47 @@ async function loadComicsFromCSV() {
     try {
         const csvUrl = "https://raw.githubusercontent.com/nicoisaok/Comics2025/main/mi_coleccion_comics.csv";
 
+        console.log("📡 Fetching:", csvUrl);
+
         const response = await fetch(csvUrl);
+        console.log("📡 Response status:", response.status);
+
         if (!response.ok) throw new Error("No se pudo cargar el CSV desde GitHub.");
 
         const csvText = await response.text();
+        console.log("📄 CSV RAW TEXT:\n", csvText.substring(0, 500));
 
         const parsed = Papa.parse(csvText, {
             header: true,
-            skipEmptyLines: true,
+            skipEmptyLines: false,
             dynamicTyping: false,
-            quoteChar: '"',
-            escapeChar: '"',
-            delimiter: ",",
         });
 
-        console.log("parsed", parsed);
+        console.log("🟦 PapaParse Resultado:", parsed);
 
-        const comics = parsed.data.map((comic, idx) => ({
-            ...Object.fromEntries(
-                Object.entries(comic).map(([k, v]) => [k.trim(), (v ?? "").toString().trim()])
-            ),
-            id: comic.id || `${Date.now()}-${idx}`,
-            tags: comic.tags ? comic.tags.split(",").map(t => t.trim()) : []
-        }));
+        if (parsed.errors.length > 0) {
+            console.error("❌ ERRORES papaparse:", parsed.errors);
+        }
+
+        const comics = parsed.data.map((comic, idx) => {
+            console.log("🟨 Fila cruda:", comic);
+
+            return {
+                ...comic,
+                id: comic.id || `${Date.now()}-${idx}`,
+                tags: comic.tags ? comic.tags.split(",").map(t => t.trim()) : []
+            }
+        });
+
+        console.log("🟩 Comics procesados:", comics);
 
         return comics;
 
     } catch (error) {
-        console.error("Error cargando CSV:", error);
+        console.error("🔥 ERROR loader:", error);
         return [];
     }
 }
-
 
             useEffect(() => {
                 const urlParams = new URLSearchParams(window.location.search);
