@@ -113,19 +113,27 @@ async function loadComicsFromCSV() {
 
         const csvText = await response.text();
 
-        // Parsear CSV → objetos
         const parsed = Papa.parse(csvText, {
             header: true,
-            skipEmptyLines: true
+            skipEmptyLines: true,
+            dynamicTyping: false,
+            quoteChar: '"',
+            escapeChar: '"',
+            delimiter: ",",
         });
 
+        console.log("parsed", parsed);
+
         const comics = parsed.data.map((comic, idx) => ({
-            ...comic,
+            ...Object.fromEntries(
+                Object.entries(comic).map(([k, v]) => [k.trim(), (v ?? "").toString().trim()])
+            ),
             id: comic.id || `${Date.now()}-${idx}`,
             tags: comic.tags ? comic.tags.split(",").map(t => t.trim()) : []
         }));
 
         return comics;
+
     } catch (error) {
         console.error("Error cargando CSV:", error);
         return [];
