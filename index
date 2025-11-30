@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestor de Cómics (Local) - Edición Marvel</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/react@17/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/papaparse@5.3.2/papaparse.min.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .font-bangers { font-family: 'Bangers', cursive; }
+        .bg-marvel-red { background-color: #ED1D24; }
+        .text-marvel-red { color: #ED1D24; }
+        .border-marvel-red { border-color: #ED1D24; }
+        .form-input {
+            display: block; width: 100%; padding: 0.5rem 0.75rem;
+            border-radius: 0.5rem; transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+            background-color: #F3F4F6; border: 1px solid #D1D5DB; color: #1F2937;
+        }
+        .form-input:focus { border-color: #ED1D24; outline: none; box-shadow: 0 0 0 2px rgba(237, 29, 36, 0.5); }
+        .dark .form-input { background-color: #374151; border: 1px solid #4B5563; color: #F3F4F6; }
+        .dark .form-input:focus { border-color: #ED1D24; }
+        .range-thumb::-webkit-slider-thumb {
+            -webkit-appearance: none; appearance: none; width: 20px; height: 20px;
+            background: #ED1D24; cursor: pointer; border-radius: 50%; border: 2px solid white;
+        }
+        .range-thumb::-moz-range-thumb {
+            width: 20px; height: 20px; background: #ED1D24; cursor: pointer;
+            border-radius: 50%; border: 2px solid white;
+        }
+        .loader {
+            border: 4px solid #f3f3f3; border-top: 4px solid #ED1D24;
+            border-radius: 50%; width: 50px; height: 50px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-gray-900">
+    <div id="root"></div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+          apiKey: "AIzaSyBrIFx3hUF-l33PP0R0WYeb8BsNDZF-1Bk",
+          authDomain: "naisa-comics.firebaseapp.com",
+          projectId: "naisa-comics",
+          storageBucket: "naisa-comics.appspot.com",
+          messagingSenderId: "644601946376",
+          appId: "1:644601946376:web:0a380a956f6508845a0cbd",
+          measurementId: "G-6WN8LCS9RM"
+        };
+        
+        try {
+            if (firebaseConfig.apiKey && firebaseConfig.apiKey !== "TU_API_KEY") {
+                const app = initializeApp(firebaseConfig);
+                const auth = getAuth(app);
+                const db = getFirestore(app);
+                
+                window.firebaseServices = { auth, db, doc, getDoc, setDoc, signInAnonymously, onAuthStateChanged };
+                console.log("Firebase initialized for sharing features.");
+            } else {
+                console.warn("Firebase config is missing. Sharing features will be disabled.");
+                window.firebaseServices = null;
+            }
+        } catch(e) {
+            console.error("Firebase initialization failed:", e);
+            window.firebaseServices = null;
+        }
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const DB_KEY = 'marvel-comics-collection';
+        const getComicsFromStorage = () => { try { const j = localStorage.getItem(DB_KEY); return j ? JSON.parse(j) : []; } catch (e) { return []; } };
+        const saveComicsToStorage = (c) => { try { localStorage.setItem(DB_KEY, JSON.stringify(c)); } catch (e) {} };
+
+        const Icon = ({ name, size = 24, className = '' }) => { const r = React.useRef(null); useEffect(() => { if (r.current && window.lucide) { const i = document.createElement('i'); i.setAttribute('data-lucide', name); r.current.innerHTML = ''; r.current.appendChild(i); lucide.createIcons(); } }, [name]); return <span ref={r} className={className} style={{ width: size, height: size, display: 'inline-block' }}></span>; };
+        
+        const App = () => {
+            const [comics, setComics] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [appMode, setAppMode] = useState('local');
+            
+            const [viewMode, setViewMode] = useState('grid');
+            const [searchTerm, setSearchTerm] = useState('');
+            const [filter, setFilter] = useState('all');
+            const [sortOrder, setSortOrder] = useState('title-asc');
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [editingComic, setEditingComic] = useState(null);
+            const [detailsComic, setDetailsComic] = useState(null);
+            const [isDarkMode, setIsDarkMode] = useState(true);
+            const [confirmModal, setConfirmModal] = useState({ isOpen: false, message: '', onConfirm: null });
+            const [shareModal, setShareModal] = useState({ isOpen: false });
+// 🔥 NUEVO: función que carga el CSV desde GitHub
+async function loadComicsFromCSV() {
+    try {
+        const csvUrl = "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/mi_coleccion.csv";
+
+        const response = await fetch(csvUrl);
+        if (!response.ok) throw new Error("No se pudo cargar el CSV desde GitHub.");
+
+        const csvText = await response.text();
+
+        // Parsear CSV → objetos
+        const parsed = Papa.parse(csvText, {
+            header: true,
+            skipEmptyLines: true
+        });
+
+        const comics = parsed.data.map((comic, idx) => ({
+            ...comic,
+            id: comic.id || `${Date.now()}-${idx}`,
+            tags: comic.tags ? comic.tags.split(",").map(t => t.trim()) : []
+        }));
+
+        return comics;
+    } catch (error) {
+        console.error("Error cargando CSV:", error);
+        return [];
+    }
+}
+
+
+            useEffect(() => {
+                const urlParams = new URLSearchParams(window.location.search);
+                const collectionId = urlParams.get('view');
+
+                if (collectionId) {
+                    setAppMode('view');
+                    setLoading(true);
+                    if (window.firebaseServices) {
+                        const { db, doc, getDoc } = window.firebaseServices;
+                        const fetchCollection = async () => {
+                            try {
+                                const docRef = doc(db, "published-collections", collectionId);
+                                const docSnap = await getDoc(docRef);
+                                if (docSnap.exists()) {
+                                    setComics(docSnap.data().comics || []);
+                                } else {
+                                    alert("La colección compartida no fue encontrada.");
+                                }
+                            } catch (error) {
+                                console.error("Error fetching shared collection:", error);
+                                alert("No se pudo cargar la colección compartida.");
+                            } finally {
+                                setLoading(false);
+                            }
+                        };
+                        fetchCollection();
+                    } else {
+    setAppMode('local');
+    setLoading(true);
+
+    loadComicsFromCSV().then(comicsFromCSV => {
+        setComics(comicsFromCSV);
+        saveComicsToStorage(comicsFromCSV);
+        setLoading(false);
+    });
+}
+
+                }
+            }, []);
+
+            useEffect(() => { document.documentElement.classList.toggle('dark', isDarkMode); document.body.className = isDarkMode ? 'bg-gray-900' : 'bg-gray-100'; }, [isDarkMode]);
+            useEffect(() => { if (window.lucide) { lucide.createIcons(); } });
+
+            const handleSaveComic = (comicData) => {
+                if (appMode === 'view') return;
+                let updatedComics;
+                if (editingComic) {
+                    updatedComics = comics.map(c => c.id === editingComic.id ? { ...comicData, id: editingComic.id } : c);
+                } else {
+                    const newComic = { ...comicData, id: Date.now().toString() };
+                    updatedComics = [...comics, newComic];
+                }
+                setComics(updatedComics);
+                saveComicsToStorage(updatedComics);
+                setIsModalOpen(false);
+                setEditingComic(null);
+            };
+
+            const requestDeleteComic = (id) => { 
+                setConfirmModal({ isOpen: true, message: "¿Estás seguro?", onConfirm: () => handleDeleteComic(id) }); 
+            };
+            const handleDeleteComic = (id) => { 
+                if(appMode === 'view') return; 
+                const updatedComics = comics.filter(c => c.id !== id); 
+                setComics(updatedComics); 
+                saveComicsToStorage(updatedComics); 
+                setConfirmModal({ isOpen: false }); 
+            };
+            
+            const handleExportData = () => {
+                if(comics.length === 0){
+                    alert("No hay cómics para exportar.");
+                    return;
+                }
+                const dataToExport = comics.map(c => ({...c, tags: Array.isArray(c.tags) ? c.tags.join(',') : '' }));
+                const csv = Papa.unparse(dataToExport);
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                link.setAttribute("download", "mi_coleccion_comics.csv");
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            const handleImportData = (event) => {
+                const file = event.target.files[0];
+                if(!file) return;
+                Papa.parse(file, {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: (results) => {
+                        const importedComics = results.data.map(c => ({...c, tags: typeof c.tags === 'string' ? c.tags.split(',').map(t => t.trim()).filter(Boolean) : [] }));
+                        if (Array.isArray(importedComics) && importedComics.length > 0) {
+                            setConfirmModal({
+                                isOpen: true,
+                                message: `Se encontraron ${importedComics.length} cómics. ¿Reemplazar colección actual?`,
+                                onConfirm: () => {
+                                    const comicsWithIds = importedComics.map((comic, idx) => ({...comic, id: comic.id || `${Date.now()}-${idx}`}));
+                                    setComics(comicsWithIds);
+                                    saveComicsToStorage(comicsWithIds);
+                                    setConfirmModal({isOpen: false});
+                                }
+                            });
+                        } else {
+                            alert("No se encontraron datos válidos.");
+                        }
+                    }
+                });
+                event.target.value = '';
+            };
+            
+            const processedComics = useMemo(() => {
+                const filtered = comics.filter(comic => {
+                    const searchTermLower = searchTerm.toLowerCase();
+                    const inTitle = comic.title && comic.title.toLowerCase().includes(searchTermLower);
+                    const inIssue = comic.issueNumber && comic.issueNumber.toString().includes(searchTermLower);
+                    const inTags = Array.isArray(comic.tags) && comic.tags.some(tag => tag.toLowerCase().includes(searchTermLower));
+                    const matchesSearch = inTitle || inIssue || inTags;
+                    const matchesFilter = filter === 'all' || comic.status === filter;
+                    return matchesSearch && matchesFilter;
+                });
+                return [...filtered].sort((a, b) => {
+                    switch (sortOrder) {
+                        case 'value-desc': return (Number(b.marketValue) || 0) - (Number(a.marketValue) || 0);
+                        case 'value-asc': return (Number(a.marketValue) || 0) - (Number(b.marketValue) || 0);
+                        case 'condition-desc': return (Number(b.condition) || 0) - (Number(a.condition) || 0);
+                        case 'condition-asc': return (Number(a.condition) || 0) - (Number(b.condition) || 0);
+                        default: return (a.title || '').localeCompare(b.title || '');
+                    }
+                });
+            }, [comics, searchTerm, filter, sortOrder]);
+
+            if (loading) { return <div className="flex items-center justify-center min-h-screen"><div className="loader"></div></div>; }
+
+            return (
+                <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200 font-sans transition-colors duration-300">
+                    <header className="bg-black shadow-lg sticky top-0 z-20">
+                        <div className="container mx-auto px-4 py-3 flex justify-between items-center">
+                            <div className="flex items-center space-x-3">
+                                <span className="bg-marvel-red text-white font-bold text-2xl px-2 -skew-x-12">MARVEL</span>
+                                <h1 className="text-white text-xl font-bold tracking-wider hidden md:block">
+                                    {appMode === 'view' ? 'COLECCIÓN COMPARTIDA' : 'GESTOR DE CÓMICS'}
+                                </h1>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                {appMode === 'local' && (
+                                    <React.Fragment>
+                                        <input type="file" id="import-file" accept=".csv, text/csv, application/vnd.ms-excel, text/plain" className="hidden" onChange={handleImportData} />
+                                        <button onClick={() => document.getElementById('import-file').click()} title="Importar Colección (CSV)" className="p-2 text-gray-400 hover:text-white transition-colors"><Icon name="upload" size={20} /></button>
+                                        <button onClick={handleExportData} title="Exportar Colección (CSV)" className="p-2 text-gray-400 hover:text-white transition-colors"><Icon name="download" size={20} /></button>
+                                        <button onClick={() => setShareModal({ isOpen: true })} title="Compartir Colección" className="p-2 text-gray-400 hover:text-white transition-colors"><Icon name="share-2" size={20} /></button>
+                                    </React.Fragment>
+                                )}
+                                <button onClick={() => setIsDarkMode(!isDarkMode)} title="Cambiar Tema" className="p-2 text-gray-400 hover:text-white transition-colors">{isDarkMode ? <Icon name="sun" size={22} /> : <Icon name="moon" size={22} />}</button>
+                                {appMode === 'local' && (
+                                    <button onClick={() => { setEditingComic(null); setIsModalOpen(true); }} className="flex items-center space-x-2 bg-marvel-red hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition-transform duration-200 hover:scale-105">
+                                        <Icon name="plus-circle" size={20} /><span className="hidden sm:inline">Añadir Cómic</span>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </header>
+                    <main className="container mx-auto p-4 md:p-6">
+                        <DashboardStats comics={comics} appMode={appMode} />
+                        <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-md mb-6 flex flex-col md:flex-row items-center justify-between gap-4">
+                            <div className="relative w-full md:w-2/5">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"><Icon name="search" size={20} /></span>
+                                <input
+                                    type="text"
+                                    placeholder="Buscar por título, número o etiqueta..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-gray-700 border-2 border-transparent focus:border-marvel-red focus:ring-0 rounded-lg transition"
+                                />
+                            </div>
+                            <div className="flex items-center gap-2 md:gap-4">
+                                <select 
+                                    value={sortOrder}
+                                    onChange={(e) => setSortOrder(e.target.value)}
+                                    className="bg-gray-100 dark:bg-gray-700 border-2 border-transparent focus:border-marvel-red focus:ring-0 rounded-lg py-2 px-3 transition"
+                                >
+                                    <option value="title-asc">Ordenar: Título (A-Z)</option>
+                                    <option value="value-desc">Ordenar: Valor (Mayor a Menor)</option>
+                                    <option value="value-asc">Ordenar: Valor (Menor a Mayor)</option>
+                                    <option value="condition-desc">Ordenar: Condición (Mejor a Peor)</option>
+                                    <option value="condition-asc">Ordenar: Condición (Peor a Mejor)</option>
+                                </select>
+                                <select 
+                                    value={filter}
+                                    onChange={(e) => setFilter(e.target.value)}
+                                    className="bg-gray-100 dark:bg-gray-700 border-2 border-transparent focus:border-marvel-red focus:ring-0 rounded-lg py-2 px-3 transition"
+                                >
+                                    <option value="all">Filtrar: Todos</option>
+                                    <option value="available">Filtrar: Disponibles</option>
+                                    <option value="forSale">Filtrar: En Venta</option>
+                                    <option value="sold">Filtrar: Vendidos</option>
+                                </select>
+                                <div className="flex items-center bg-gray-200 dark:bg-gray-700 rounded-lg p-1">
+                                    <button onClick={() => setViewMode('grid')} className={`p-2 rounded-md ${viewMode === 'grid' ? 'bg-marvel-red text-white' : 'text-gray-500 dark:text-gray-300'}`}>
+                                        <Icon name="layout-grid" size={20} />
+                                    </button>
+                                    <button onClick={() => setViewMode('list')} className={`p-2 rounded-md ${viewMode === 'list' ? 'bg-marvel-red text-white' : 'text-gray-500 dark:text-gray-300'}`}>
+                                        <Icon name="list" size={20} />
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        {processedComics.length > 0 ? 
+                            (viewMode === 'grid' ? <ComicGrid comics={processedComics} onEdit={(c) => {setEditingComic(c); setIsModalOpen(true);}} onDelete={requestDeleteComic} onShowDetails={setDetailsComic} appMode={appMode} /> : <ComicList comics={processedComics} onEdit={(c) => {setEditingComic(c); setIsModalOpen(true);}} onDelete={requestDeleteComic} onShowDetails={setDetailsComic} appMode={appMode} />) :
+                            <div className="text-center py-16">
+                                <Icon name="book-open" size={64} className="mx-auto text-gray-400 dark:text-gray-500" />
+                                <h3 className="mt-4 text-xl font-semibold">No se encontraron cómics</h3>
+                            </div>
+                        }
+                    </main>
+                    {isModalOpen && <ComicFormModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSave={handleSaveComic} comic={editingComic} />}
+                    {detailsComic && <ComicDetailsModal comic={detailsComic} onClose={() => setDetailsComic(null)} />}
+                    {confirmModal.isOpen && <ConfirmModal isOpen={confirmModal.isOpen} message={confirmModal.message} onConfirm={confirmModal.onConfirm} onClose={() => setConfirmModal({ isOpen: false })} />}
+                    {shareModal.isOpen && <ShareModal comics={comics} onClose={() => setShareModal({ isOpen: false })} />}
+                </div>
+            );
+        };
+        
+        const ComicGrid = ({ comics, onEdit, onDelete, onShowDetails, appMode }) => ( <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">{comics.map(c => <ComicCard key={c.id} comic={c} onEdit={onEdit} onDelete={onDelete} onShowDetails={onShowDetails} appMode={appMode} />)}</div>);
+        const ComicList = ({ comics, onEdit, onDelete, onShowDetails, appMode }) => ( <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md overflow-hidden"><table className="w-full text-left"><thead className="bg-gray-50 dark:bg-gray-700"><tr><th className="p-4 font-semibold">Portada</th><th className="p-4 font-semibold">Título</th><th className="p-4 font-semibold hidden md:table-cell">Editorial</th><th className="p-4 font-semibold hidden sm:table-cell">Estado</th><th className="p-4 font-semibold hidden lg:table-cell">Valor</th><th className="p-4 font-semibold">Acciones</th></tr></thead><tbody className="divide-y divide-gray-200 dark:divide-gray-600">{comics.map(c => <ComicListItem key={c.id} comic={c} onEdit={onEdit} onDelete={onDelete} onShowDetails={onShowDetails} appMode={appMode} />)}</tbody></table></div>);
+        
+        const DashboardStats = ({ comics, appMode }) => {
+            const stats = useMemo(() => {
+                const totalComics = comics.length;
+                const totalValue = comics.reduce((s, c) => s + (Number(c.marketValue) || 0), 0);
+                const soldComics = comics.filter(c => c.status === 'sold');
+                const totalRevenue = soldComics.reduce((s, c) => s + (Number(c.salePrice) || 0), 0);
+                const totalProfit = soldComics.reduce((s, c) => {
+                    const profit = (Number(c.salePrice) || 0) - (Number(c.purchasePrice) || 0);
+                    return s + profit;
+                }, 0);
+                return { totalComics, totalValue, totalRevenue, totalProfit };
+            }, [comics]);
+
+            return (
+                <div className={`grid ${appMode === 'view' ? 'grid-cols-1' : 'grid-cols-2 md:grid-cols-4'} gap-4 mb-6 ${appMode === 'view' ? 'max-w-xs mx-auto md:mx-0' : ''}`}>
+                    <StatCard icon={<Icon name="book-open" />} title="Cómics Totales" value={stats.totalComics} color="blue" />
+                    {appMode === 'local' && (
+                        <React.Fragment>
+                            <StatCard icon={<Icon name="trending-up" />} title="Valor Estimado" value={`$${stats.totalValue.toFixed(2)}`} color="green" />
+                            <StatCard icon={<Icon name="dollar-sign" />} title="Ingresos Totales" value={`$${stats.totalRevenue.toFixed(2)}`} color="yellow" />
+                            <StatCard icon={<Icon name="star" />} title="Ganancia Neta" value={`$${stats.totalProfit.toFixed(2)}`} color="red" />
+                        </React.Fragment>
+                    )}
+                </div>
+            );
+        };
+        
+        const StatCard = ({ icon, title, value, color }) => { const c={blue:'from-blue-500 to-blue-600',green:'from-green-500 to-green-600',yellow:'from-yellow-500 to-yellow-600',red:'from-red-500 to-red-600'};return(<div className={`bg-gradient-to-br ${c[color]} text-white p-4 rounded-xl shadow-lg flex items-center space-x-4`}><div className="text-3xl opacity-80">{icon}</div><div><p className="text-sm font-light">{title}</p><p className="text-2xl font-bold">{value}</p></div></div>);};
+        const ComicCard = ({ comic, onEdit, onDelete, onShowDetails, appMode }) => { const getStatusChip=(s)=>{switch(s){case'forSale':return <div className="absolute top-2 right-2 bg-yellow-500 text-white text-xs font-bold px-2 py-1 rounded-full shadow-md">EN VENTA</div>;case'sold':return <div className="absolute top-2 right-2 bg-green-600 text-white text-xs font-bold px-2 py-1 rounded-full shadow-md">VENDIDO</div>;default:return null;}};return(<div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg overflow-hidden group relative transition-transform duration-300 hover:-translate-y-2"><img src={comic.coverUrl||`https://placehold.co/400x600/000000/ED1D24?text=${comic.title.replace(/\s/g,'+')}`} alt={`Portada de ${comic.title}`} className="w-full h-64 object-cover cursor-pointer" onClick={()=>onShowDetails(comic)} onError={(e)=>{e.target.onerror=null;e.target.src=`https://placehold.co/400x600/000000/ED1D24?text=Error`;}}/>{getStatusChip(comic.status)}<div className="p-3"><h4 className="font-bold text-sm truncate">{comic.title}</h4><p className="text-xs text-gray-500 dark:text-gray-400">#{comic.issueNumber||'N/A'}</p></div><div className="absolute inset-0 bg-black bg-opacity-70 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 p-4 text-center"><h4 className="font-bold text-white text-md">{comic.title} #{comic.issueNumber}</h4><p className="text-sm text-gray-300">{comic.publisher}</p><p className="text-lg font-bold text-marvel-red mt-2">${Number(comic.marketValue||0).toFixed(2)}</p><div className="mt-4 flex space-x-2"><button onClick={()=>onShowDetails(comic)} className="p-2 bg-green-600 text-white rounded-full hover:bg-green-700 transition-colors" title="Ver Detalles"><Icon name="eye" size={18}/></button>{appMode==='local' && <React.Fragment><button onClick={()=>onEdit(comic)} className="p-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors" title="Editar"><Icon name="edit" size={18}/></button><button onClick={()=>onDelete(comic.id)} className="p-2 bg-marvel-red text-white rounded-full hover:bg-red-700 transition-colors" title="Eliminar"><Icon name="trash-2" size={18}/></button></React.Fragment>}</div></div></div>);};
+        const ComicListItem = ({ comic, onEdit, onDelete, onShowDetails, appMode }) => { const getStatusPill=(s)=>{switch(s){case'available':return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">Disponible</span>;case'forSale':return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">En Venta</span>;case'sold':return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Vendido</span>;default:return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800 dark:bg-gray-600 dark:text-gray-200">N/A</span>;}};return(<tr className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"><td className="p-2 md:p-4"><img src={comic.coverUrl||`https://placehold.co/80x120/000000/ED1D24?text=Comic`} alt={`Portada de ${comic.title}`} className="w-12 h-18 object-cover rounded-md shadow-sm" onError={(e)=>{e.target.onerror=null;e.target.src=`https://placehold.co/80x120/000000/ED1D24?text=Error`;}}/></td><td className="p-2 md:p-4"><p className="font-bold">{comic.title}</p><p className="text-sm text-gray-500 dark:text-gray-400">#{comic.issueNumber||'N/A'}</p></td><td className="p-2 md:p-4 hidden md:table-cell">{comic.publisher||'N/A'}</td><td className="p-2 md:p-4 hidden sm:table-cell">{getStatusPill(comic.status)}</td><td className="p-2 md:p-4 font-semibold text-green-600 dark:text-green-400 hidden lg:table-cell">${Number(comic.marketValue||0).toFixed(2)}</td><td className="p-2 md:p-4"><div className="flex items-center space-x-2"><button onClick={()=>onShowDetails(comic)} className="p-2 text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" title="Ver Detalles"><Icon name="eye" size={18}/></button>{appMode==='local' && <React.Fragment><button onClick={()=>onEdit(comic)} className="p-2 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" title="Editar"><Icon name="edit" size={18}/></button><button onClick={()=>onDelete(comic.id)} className="p-2 text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" title="Eliminar"><Icon name="trash-2" size={18}/></button></React.Fragment>}</div></td></tr>);};
+        const ConfirmModal = ({ isOpen, message, onConfirm, onClose }) => { if(!isOpen) return null; return(<div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4"><div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-sm"><div className="p-6 text-center"><Icon name="alert-triangle" size={48} className="mx-auto text-yellow-500"/><h3 className="text-lg font-semibold mt-4">Confirmación Requerida</h3><p className="text-sm text-gray-600 dark:text-gray-300 mt-2">{message}</p></div><div className="px-6 py-4 bg-gray-50 dark:bg-gray-700/50 flex justify-end space-x-3"><button onClick={onClose} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 transition">Cancelar</button><button onClick={onConfirm} className="px-4 py-2 bg-marvel-red text-white font-bold rounded-lg hover:bg-red-700 transition">Confirmar</button></div></div></div>);};
+        const ComicDetailsModal = ({ comic, onClose }) => { if(!comic) return null; return(<div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4"><div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"><div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700"><h2 className="text-xl font-bold text-gray-800 dark:text-white">Detalles del Cómic</h2><button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><Icon name="x" size={24}/></button></div><div className="overflow-y-auto p-6"><div className="flex flex-col md:flex-row gap-6"><div className="md:w-1/3 flex-shrink-0"><img src={comic.coverUrl||`https://placehold.co/400x600/000000/ED1D24?text=${comic.title.replace(/\s/g,'+')}`} alt={`Portada de ${comic.title}`} className="w-full h-auto object-cover rounded-lg shadow-lg" onError={(e)=>{e.target.onerror=null;e.target.src=`https://placehold.co/400x600/000000/ED1D24?text=Error`;}}/></div><div className="md:w-2/3 space-y-4"><h3 className="text-3xl font-bold text-marvel-red">{comic.title} #{comic.issueNumber}</h3><div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm"><DetailItem label="Editorial" value={comic.publisher}/><DetailItem label="Publicación" value={comic.publicationDate}/><DetailItem label="Escritor" value={comic.writer}/><DetailItem label="Dibujante" value={comic.artist}/><DetailItem label="Condición" value={`${comic.condition}/10`}/><DetailItem label="Valor Estimado" value={`$${Number(comic.marketValue||0).toFixed(2)}`}/></div>{comic.description&&<div><h4 className="font-bold text-lg mt-4 mb-2 border-b border-gray-300 dark:border-gray-600 pb-1">Descripción</h4><p className="text-gray-600 dark:text-gray-300 whitespace-pre-wrap">{comic.description}</p></div>}{Array.isArray(comic.tags)&&comic.tags.length>0&&<div><h4 className="font-bold text-lg mt-4 mb-2 border-b border-gray-300 dark:border-gray-600 pb-1">Etiquetas</h4><div className="flex flex-wrap gap-2">{comic.tags.map(t=><span key={t} className="bg-gray-200 dark:bg-gray-700 text-xs font-semibold px-2.5 py-1 rounded-full">{t}</span>)}</div></div>}</div></div></div><div className="p-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 mt-auto"><div className="flex justify-end"><button type="button" onClick={onClose} className="px-6 py-2 bg-marvel-red text-white font-bold rounded-lg hover:bg-red-700 transition">Cerrar</button></div></div></div></div>);};
+        const DetailItem = ({ label, value }) => (<div className="flex flex-col"><span className="font-semibold text-gray-500 dark:text-gray-400">{label}</span><span className="text-gray-800 dark:text-gray-200">{value||'N/A'}</span></div>);
+        const ComicFormModal = ({ isOpen, onClose, onSave, comic }) => { const[f,s]=useState({});const r=React.useRef(null);useEffect(()=>{const i={title:'',issueNumber:'',publisher:'Marvel',publicationDate:'',writer:'',artist:'',description:'',coverUrl:'',condition:'8',marketValue:'',status:'available',purchasePrice:'',salePrice:'',saleDate:'',salePlatform:'',tags:[]};const d=comic?{...i,...comic}:i;d.tags=Array.isArray(d.tags)?d.tags.join(', '):'';s(d);},[comic,isOpen]);const h=(e)=>{const{name,value}=e.target;s(p=>({...p,[name]:value}));};const H=(e)=>{e.preventDefault();const d={...f,tags:typeof f.tags==='string'?f.tags.split(',').map(t=>t.trim()).filter(Boolean):[]};onSave(d);};if(!isOpen)return null;return(<div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4"><div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"><div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700"><h2 className="text-xl font-bold text-gray-800 dark:text-white">{comic?'Editar Cómic':'Añadir Nuevo Cómic'}</h2><button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><Icon name="x" size={24}/></button></div><form ref={r} onSubmit={H} className="overflow-y-auto p-6 space-y-6"><div className="grid grid-cols-1 md:grid-cols-2 gap-6"><div className="space-y-4"><h3 className="text-lg font-semibold border-b-2 border-marvel-red pb-1">Información General</h3><FormInput name="title" label="Título de la serie" value={f.title} onChange={h} required/><div className="grid grid-cols-2 gap-4"><FormInput name="issueNumber" label="Número" value={f.issueNumber} onChange={h} required/><FormInput name="publisher" label="Editorial" value={f.publisher} onChange={h}/></div><FormInput name="publicationDate" label="Fecha de publicación" type="date" value={f.publicationDate} onChange={h}/><div className="grid grid-cols-2 gap-4"><FormInput name="writer" label="Escritor" value={f.writer} onChange={h}/><FormInput name="artist" label="Dibujante" value={f.artist} onChange={h}/></div><FormInput name="coverUrl" label="URL de la Portada" value={f.coverUrl} onChange={h} placeholder="https://ejemplo.com/portada.jpg"/><FormInput name="tags" label="Etiquetas (separadas por comas)" value={f.tags} onChange={h} placeholder="Spider-Man, Primera Aparición..."/><div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Descripción</label><textarea name="description" value={f.description} onChange={h} rows="3" className="form-input"></textarea></div></div><div className="space-y-4"><h3 className="text-lg font-semibold border-b-2 border-marvel-red pb-1">Estado y Valor</h3><div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Condición: {f.condition}/10</label><input type="range" name="condition" min="1" max="10" value={f.condition} onChange={h} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 range-thumb"/></div><FormInput name="marketValue" label="Valor de mercado estimado ($)" type="number" step="0.01" value={f.marketValue} onChange={h}/><div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Estado</label><select name="status" value={f.status} onChange={h} className="form-input"><option value="available">Disponible</option><option value="forSale">En Venta</option><option value="sold">Vendido</option><option value="archived">Archivado</option></select></div>{(f.status==='forSale'||f.status==='sold')&&(<div className="p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg space-y-4"><h4 className="font-semibold">Datos de Venta</h4><FormInput name="purchasePrice" label="Precio de compra ($)" type="number" step="0.01" value={f.purchasePrice} onChange={h}/><FormInput name="salePrice" label="Precio de venta ($)" type="number" step="0.01" value={f.salePrice} onChange={h}/>{f.status==='sold'&&(<><FormInput name="saleDate" label="Fecha de venta" type="date" value={f.saleDate} onChange={h}/><FormInput name="salePlatform" label="Plataforma de venta" value={f.salePlatform} onChange={h} placeholder="Instagram, FB Marketplace..."/></>)}</div>)}</div></div></form><div className="p-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 mt-auto"><div className="flex justify-end space-x-4"><button type="button" onClick={onClose} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 transition">Cancelar</button><button type="button" onClick={()=>r.current.dispatchEvent(new Event('submit',{cancelable:true,bubbles:true}))} className="px-6 py-2 bg-marvel-red text-white font-bold rounded-lg hover:bg-red-700 transition">Guardar</button></div></div></div></div>);};
+        const FormInput = ({ label, ...props }) => { return (<div><label htmlFor={props.name} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{label}</label><input id={props.name} {...props} className="form-input"/></div>);};
+        const ShareModal = ({ comics, onClose }) => { const[s,t]=useState('idle');const[l,u]=useState('');const[i,v]=useState(null);useEffect(()=>{if(!window.firebaseServices){t('no-config');return;}const{auth,onAuthStateChanged,signInAnonymously}=window.firebaseServices;onAuthStateChanged(auth,(user)=>{if(user){v(user.uid);}else{signInAnonymously(auth);}});},[]);const handlePublish=async()=>{if(!i){alert("Esperando autenticación. Inténtalo de nuevo.");return;}t('publishing');const{db,doc,setDoc}=window.firebaseServices;try{const r=doc(db,"published-collections",i);await setDoc(r,{comics:comics,lastUpdated:new Date().toISOString()});const baseUrl=window.location.origin;const k=`${baseUrl}/?view=${i}`;u(k);t('success');}catch(e){console.error("Error publishing collection:",e);t('error');}};const handleCopyLink=()=>{navigator.clipboard.writeText(l).then(()=>alert('¡Link copiado!'));};return(<div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4"><div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md"><div className="p-4 border-b dark:border-gray-700 flex justify-between items-center"><h3 className="text-lg font-bold">Compartir Colección</h3><button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><Icon name="x"/></button></div><div className="p-6 text-center">{s==='no-config'&&<p className="text-yellow-500">Función desactivada. Añade tu configuración de Firebase en el HTML.</p>}{s==='idle'&&<><Icon name="share-2" size={48} className="mx-auto text-blue-500"/><p className="mt-4">Esto publicará una versión de solo lectura de tu colección.</p><button onClick={handlePublish} className="mt-6 w-full bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition">Publicar y Obtener Link</button></>}{s==='publishing'&&<div className="loader mx-auto"></div>}{s==='error'&&<p className="text-red-500">No se pudo publicar. Revisa la consola.</p>}{s==='success'&&<><Icon name="check-circle" size={48} className="mx-auto text-green-500"/><p className="mt-4 font-semibold">¡Tu colección está online!</p><p className="text-sm text-gray-500">Copia y comparte este link:</p><div className="mt-2 flex items-center"><a href={l} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline truncate">{l}</a><button onClick={handleCopyLink} className="p-2 ml-2 bg-gray-200 dark:bg-gray-600 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500"><Icon name="copy" size={16}/></button></div></>}</div></div></div>);};
+
+        // --- Final Render Call ---
+        ReactDOM.render(<App />, document.getElementById('root'));
+
+    </script>
+</body>
+</html>
