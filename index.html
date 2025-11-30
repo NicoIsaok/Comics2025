@@ -151,46 +151,55 @@ async function loadComicsFromCSV() {
         return [];
     }
 }
+useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const collectionId = urlParams.get('view');
 
-            useEffect(() => {
-                const urlParams = new URLSearchParams(window.location.search);
-                const collectionId = urlParams.get('view');
+    if (collectionId) {
+        // Modo vista compartida
+        setAppMode('view');
+        setLoading(true);
 
-                if (collectionId) {
-                    setAppMode('view');
-                    setLoading(true);
-                    if (window.firebaseServices) {
-                        const { db, doc, getDoc } = window.firebaseServices;
-                        const fetchCollection = async () => {
-                            try {
-                                const docRef = doc(db, "published-collections", collectionId);
-                                const docSnap = await getDoc(docRef);
-                                if (docSnap.exists()) {
-                                    setComics(docSnap.data().comics || []);
-                                } else {
-                                    alert("La colección compartida no fue encontrada.");
-                                }
-                            } catch (error) {
-                                console.error("Error fetching shared collection:", error);
-                                alert("No se pudo cargar la colección compartida.");
-                            } finally {
-                                setLoading(false);
-                            }
-                        };
-                        fetchCollection();
+        if (window.firebaseServices) {
+            const { db, doc, getDoc } = window.firebaseServices;
+            const fetchCollection = async () => {
+                try {
+                    const docRef = doc(db, "published-collections", collectionId);
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists()) {
+                        setComics(docSnap.data().comics || []);
                     } else {
-    setAppMode('local');
-    setLoading(true);
-
-    loadComicsFromCSV().then(comicsFromCSV => {
-        setComics(comicsFromCSV);
-        saveComicsToStorage(comicsFromCSV);
-        setLoading(false);
-    });
-}
-
+                        alert("La colección compartida no fue encontrada.");
+                    }
+                } catch (error) {
+                    console.error("Error fetching shared collection:", error);
+                    alert("No se pudo cargar la colección compartida.");
+                } finally {
+                    setLoading(false);
                 }
-            }, []);
+            };
+            fetchCollection();
+        } else {
+            // Si no hay Firebase, igualmente trabaja local
+            setAppMode('local');
+            loadComicsFromCSV().then(comics => {
+                setComics(comics);
+                saveComicsToStorage(comics);
+                setLoading(false);
+            });
+        }
+
+    } else {
+        // Caso normal → cargar CSV SIEMPRE
+        setAppMode('local');
+        loadComicsFromCSV().then(comics => {
+            setComics(comics);
+            saveComicsToStorage(comics);
+            setLoading(false);
+        });
+    }
+
+}, []);
 
             useEffect(() => { document.documentElement.classList.toggle('dark', isDarkMode); document.body.className = isDarkMode ? 'bg-gray-900' : 'bg-gray-100'; }, [isDarkMode]);
             useEffect(() => { if (window.lucide) { lucide.createIcons(); } });
