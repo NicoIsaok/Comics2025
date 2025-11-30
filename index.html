@@ -106,7 +106,7 @@
 // 🔥 NUEVO: función que carga el CSV desde GitHub
 async function loadComicsFromCSV() {
     try {
-        const csvUrl = "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/mi_coleccion.csv";
+        const csvUrl = "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/mi_coleccion_comics.csv";
 
         const response = await fetch(csvUrl);
         if (!response.ok) throw new Error("No se pudo cargar el CSV desde GitHub.");
