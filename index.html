@@ -78,6 +78,41 @@
             window.firebaseServices = null;
         }
     </script>
+<script>
+async function cargarCatalogo() {
+    const url = "https://raw.githubusercontent.com/USUARIO/REPO/main/archivo.csv";
+
+    const response = await fetch(url);
+    const data = await response.text();
+
+    const filas = data.split("\n").map(row => row.split(","));
+
+    // Asumiendo que la primera fila son los títulos
+    const headers = filas[0];
+    const items = filas.slice(1).map(row => {
+        let obj = {};
+        headers.forEach((h,i) => obj[h.trim()] = row[i]?.trim());
+        return obj;
+    });
+
+    renderCatalogo(items);
+}
+
+function renderCatalogo(items) {
+    const container = document.getElementById("catalogo");
+
+    container.innerHTML = items.map(i => `
+        <div class="comic-card">
+            <h3>${i.titulo}</h3>
+            <p>Autor: ${i.autor}</p>
+            <p>Año: ${i.anio}</p>
+            <button onclick='editar(${JSON.stringify(i)})'>Editar</button>
+        </div>
+    `).join("");
+}
+
+cargarCatalogo();
+</script>
 
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
@@ -374,3 +409,4 @@
     </script>
 </body>
 </html>
+
